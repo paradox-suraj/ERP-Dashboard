@@ -11,7 +11,7 @@
 import { createClient } from "@supabase/supabase-js"
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const anon = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 if (!url || !anon) {
   console.error("Missing NEXT_PUBLIC_SUPABASE_URL / ANON_KEY. Did you source .env.local?")
   process.exit(2)

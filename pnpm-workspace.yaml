@@ -1,0 +1,9 @@
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver
+minimumReleaseAgeExclude:
+  - framer-motion@13.2.0
+  - motion-dom@13.2.0

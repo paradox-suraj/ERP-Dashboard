@@ -1,0 +1,269 @@
+import Link from "next/link"
+import { Wallet, Flame, Users, Lock, PlugZap, ChevronRight } from "lucide-react"
+
+import { createClient } from "@/lib/supabase/server"
+import { requireOrgContext } from "@/lib/auth"
+import { formatINR, paiseToRupee } from "@/lib/money"
+import { PageHeader } from "@/components/page-header"
+import { StatCard } from "@/components/stat-card"
+import { EmptyState } from "@/components/empty-state"
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { SettingsForm } from "./_components/settings-form"
+import { TeamInvitations } from "./_components/team-invitations"
+import { updateOrgSettings } from "./actions"
+
+export const dynamic = "force-dynamic"
+
+function initials(name: string | null, fallback: string): string {
+  const base = name?.trim() || fallback
+  const parts = base.split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return "?"
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase()
+  return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase()
+}
+
+export default async function SettingsPage() {
+  const ctx = await requireOrgContext()
+  const supabase = await createClient()
+  const canEdit = ctx.role === "owner" || ctx.role === "admin"
+
+  // org_settings is a single row per org (org_id unique). May not exist yet.
+  const { data: settings } = await supabase
+    .from("org_settings")
+    .select("cash_balance_paise, monthly_burn_paise")
+    .eq("org_id", ctx.orgId)
+    .maybeSingle()
+
+  const cashPaise = settings?.cash_balance_paise ?? 0
+  const burnPaise = settings?.monthly_burn_paise ?? null
+
+  // Team: memberships have no PostgREST FK embed to profiles, so fetch both and
+  // join in memory. RLS lets co-members read each other's profiles.
+  const { data: members } = await supabase
+    .from("memberships")
+    .select("user_id, role, created_at")
+    .eq("org_id", ctx.orgId)
+    .order("created_at", { ascending: true })
+
+  const userIds = (members ?? []).map((m) => m.user_id)
+  const { data: profiles } = userIds.length
+    ? await supabase
+        .from("profiles")
+        .select("id, full_name")
+        .in("id", userIds)
+    : { data: [] as { id: string; full_name: string | null }[] }
+
+  const nameById = new Map(
+    (profiles ?? []).map((p) => [p.id, p.full_name] as const)
+  )
+
+  // Pending invitations (owner/admin manage these).
+  const { data: pendingInvites } = canEdit
+    ? await supabase
+        .from("invitations")
+        .select("id, email, role, token")
+        .eq("org_id", ctx.orgId)
+        .eq("status", "pending")
+        .order("created_at", { ascending: false })
+    : { data: [] as { id: string; email: string; role: string; token: string }[] }
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ""
+
+  const team = (members ?? []).map((m) => ({
+    userId: m.user_id,
+    role: m.role,
+    fullName: nameById.get(m.user_id) ?? null,
+    // Email isn't stored on profiles (it lives in auth.users, hidden by RLS).
+    // We can only surface the signed-in user's own email reliably.
+    email: m.user_id === ctx.userId ? ctx.email : null,
+    isSelf: m.user_id === ctx.userId,
+  }))
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Settings"
+        description="Workspace finances and your team. Cash here drives the dashboard."
+      />
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard
+          label="Cash on hand"
+          value={formatINR(cashPaise)}
+          icon={Wallet}
+        />
+        <StatCard
+          label="Monthly burn override"
+          value={burnPaise === null ? "Not set" : formatINR(burnPaise)}
+          icon={Flame}
+          tone={burnPaise === null ? "default" : "warning"}
+          hint={burnPaise === null ? "Using actual recorded costs" : undefined}
+        />
+        <StatCard
+          label="Team members"
+          value={String(team.length)}
+          icon={Users}
+        />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Workspace</CardTitle>
+            <CardDescription>
+              {canEdit
+                ? "Update your workspace name and finances."
+                : "Financial settings (view only)."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {canEdit ? (
+              <SettingsForm
+                defaultOrgName={ctx.orgName}
+                defaultCashRupee={paiseToRupee(cashPaise)}
+                defaultBurnRupee={burnPaise === null ? null : paiseToRupee(burnPaise)}
+                action={updateOrgSettings}
+              />
+            ) : (
+              <div className="space-y-4">
+                <Alert>
+                  <Lock className="size-4" />
+                  <AlertTitle>View only</AlertTitle>
+                  <AlertDescription>
+                    Only an owner or admin can change workspace settings.
+                  </AlertDescription>
+                </Alert>
+                <dl className="divide-y text-sm">
+                  <div className="flex items-center justify-between py-2.5">
+                    <dt className="text-muted-foreground">Workspace name</dt>
+                    <dd className="font-medium">{ctx.orgName}</dd>
+                  </div>
+                  <div className="flex items-center justify-between py-2.5">
+                    <dt className="text-muted-foreground">Cash balance</dt>
+                    <dd className="font-medium">{formatINR(cashPaise)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between py-2.5">
+                    <dt className="text-muted-foreground">Monthly burn override</dt>
+                    <dd className="font-medium">
+                      {burnPaise === null ? "Not set" : formatINR(burnPaise)}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Team</CardTitle>
+            <CardDescription>People with access to this workspace.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {team.length === 0 ? (
+              <EmptyState
+                icon={Users}
+                title="No team members"
+                description="Invitations will appear here once teammates join."
+                className="border-0 p-6"
+              />
+            ) : (
+              <ul className="divide-y">
+                {team.map((member) => (
+                  <li
+                    key={member.userId}
+                    className="flex items-center gap-3 py-2.5"
+                  >
+                    <Avatar className="size-9 shrink-0">
+                      <AvatarFallback className="text-xs">
+                        {initials(member.fullName, member.email ?? "?")}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium">
+                          {member.fullName ?? "Unnamed teammate"}
+                        </span>
+                        {member.isSelf ? (
+                          <Badge variant="secondary" className="shrink-0">
+                            You
+                          </Badge>
+                        ) : null}
+                      </div>
+                      {member.email ? (
+                        <p className="text-muted-foreground truncate text-xs">
+                          {member.email}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Badge variant="outline" className="shrink-0 capitalize">
+                      {member.role}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {canEdit ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Invitations</CardTitle>
+            <CardDescription>
+              Invite teammates by email. They join this workspace when they
+              accept the link.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <TeamInvitations
+              invites={(pendingInvites ?? []).map((i) => ({
+                id: i.id,
+                email: i.email,
+                role: i.role,
+                token: i.token,
+              }))}
+              appUrl={appUrl}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Integrations</CardTitle>
+          <CardDescription>
+            Connect Paradox ERP to the tools you already use.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Link
+            href="/settings/accounting"
+            className="hover:bg-accent flex items-center gap-3 rounded-lg border p-3 transition-colors"
+          >
+            <div className="bg-muted flex size-9 shrink-0 items-center justify-center rounded-md">
+              <PlugZap className="size-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">Accounting sync</p>
+              <p className="text-muted-foreground truncate text-xs">
+                Scaffold invoice syncing to FlowAccount, PEAK or Xero.
+              </p>
+            </div>
+            <ChevronRight className="text-muted-foreground size-4 shrink-0" />
+          </Link>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}

@@ -3,11 +3,6 @@ import { cookies } from "next/headers"
 
 import type { Database } from "@/lib/types/database"
 
-/**
- * Supabase client for Server Components, Server Actions, and Route Handlers.
- * Bound to the user's session via cookies and subject to RLS. Create a new one
- * per request — never share across requests.
- */
 export async function createClient() {
   const cookieStore = await cookies()
 
